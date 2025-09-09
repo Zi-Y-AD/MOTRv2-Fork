@@ -273,20 +273,151 @@ def get_sha():
 
 
 def collate_fn(batch):
+    
     batch = list(zip(*batch))
     batch[0] = nested_tensor_from_tensor_list(batch[0], size_divisibility=32)
     return tuple(batch)
 
 
-def mot_collate_fn(batch: List[dict]) -> dict:
-    ret_dict = {}
-    for key in list(batch[0].keys()):
-        assert not isinstance(batch[0][key], Tensor)
-        ret_dict[key] = [img_info[key] for img_info in batch]
-        if len(ret_dict[key]) == 1:
-            ret_dict[key] = ret_dict[key][0]
-    return ret_dict
+# def mot_collate_fn(batch: List[dict]) -> dict:
+#    # # DEBUG: introspecter tout le batch
+#    #  print("==== COLLATE DEBUG START ====")
+#    #  for key in batch[0].keys():
+#    #      v = batch[0][key]
+#    #      print("KEY:", key, "TYPE:", type(v))
+#    #      # si c'est un dict, lister ses sous-clés
+#    #      if isinstance(v, dict):
+#    #          for sk, sv in v.items():
+#    #              print("   subkey:", sk, "type:", type(sv))
+#    #              # si c'est une list, afficher le type du premier élément
+#    #              if isinstance(sv, (list, tuple)) and len(sv) > 0:
+#    #                  print("      element type:", type(sv[0]))
+#    #      # si c'est une list, lister type du premier élément
+#    #      if isinstance(v, (list, tuple)) and len(v) > 0:
+#    #          print("   first elem type:", type(v[0]))
+#    #  print("==== COLLATE DEBUG END ====")
+#     ret_dict = {}
+#     for key in list(batch[0].keys()):
+#         # print(key, type(batch[0][key]))
+#         if key == "img":
+#             continue
+#         assert not isinstance(batch[0][key], Tensor)
+#         ret_dict[key] = [img_info[key] for img_info in batch]
+#         if len(ret_dict[key]) == 1:
+#             ret_dict[key] = ret_dict[key][0]
+#     return ret_dict
+# ============================
+# def mot_collate_fn(batch):
+#     """
+#     Collate function pour MOTR.
+#     Transforme un batch de dicts en un dict avec des listes/tensors.
+#     """
+#     collated = {}
+    
+#     # On parcourt les clés du premier élément du batch
+#     for key in batch[0]:
+#         if key == 'img':  # renommer en 'imgs'
+#             collated['imgs'] = [d['img'] for d in batch]  # liste de tensors
+#         elif key == 'gt_instances':
+#             # on garde la structure dict mais on fait une liste par subkey
+#             subkeys = batch[0]['gt_instances'].keys()
+#             collated['gt_instances'] = {
+#                 k: [d['gt_instances'][k] for d in batch] for k in subkeys
+#             }
+#         else:
+#             # on fait simplement une liste pour les autres clés
+#             collated[key] = [d[key] for d in batch]
+#         # Ajouter proposals si absent
+#         if 'proposals' not in batch[0]:
+#             collated['proposals'] = [[] for _ in batch]  # ou [] selon ce que le modèle attend
 
+#     return collated
+# ===========================
+
+# def mot_collate_fn(batch):
+#     """
+#     Collate function for MOTR training.
+#     batch: list of samples returned by Dataset.__getitem__
+#     Each sample is a dict with keys:
+#         'img': Tensor
+#         'gt_instances': dict with keys 'boxes' (list of lists) and 'labels' (list of int)
+#         'proposals': optional, can be None
+#         'image_id', 'size', 'orig_size' ...
+#     """
+#     collated = {}
+    
+#     # Images: stack into a single tensor [B, C, H, W]
+#     collated['imgs'] = torch.stack([sample['img'] for sample in batch], dim=0)
+    
+#     # GT instances: ensure it's a list of dicts
+#     collated['gt_instances'] = []
+#     for sample in batch:
+#         gt = sample.get('gt_instances', None)
+#         if gt is None:
+#             gt = {'boxes': [], 'labels': []}
+#         else:
+#             # assure keys exist
+#             if 'boxes' not in gt: gt['boxes'] = []
+#             if 'labels' not in gt: gt['labels'] = []
+#         collated['gt_instances'].append(gt)
+    
+#     # Proposals: if missing, create empty placeholders
+#     collated['proposals'] = []
+#     for sample in batch:
+#         prop = sample.get('proposals', None)
+#         if prop is None:
+#             prop = {'boxes': [], 'labels': []}  # empty placeholder
+#         collated['proposals'].append(prop)
+    
+#     # Other fields: image_id, size, orig_size
+#     collated['image_id'] = [sample.get('image_id', 0) for sample in batch]
+#     collated['size'] = [sample.get('size', (0,0)) for sample in batch]
+#     collated['orig_size'] = [sample.get('orig_size', (0,0)) for sample in batch]
+    
+#     return collated
+# =======================================
+import torch
+
+class Instances:
+    def __init__(self, boxes, labels):
+        self.boxes = boxes
+        self.labels = labels
+
+def mot_collate_fn(batch):
+    """
+    batch: list of dicts, each dict = {
+        'img': Tensor,
+        'gt_instances': {'boxes': list, 'labels': list},
+        'image_id': list,
+        'orig_size': tuple,
+        'size': tuple
+    }
+    """
+    collated = {}
+
+    # imgs → list of tensors
+    collated['imgs'] = [b['img'] for b in batch]
+
+    # gt_instances → list of Instances objects
+    gt_list = []
+    for b in batch:
+        gt = b['gt_instances']
+        boxes = torch.tensor(gt['boxes'], dtype=torch.float32)
+        labels = torch.tensor(gt['labels'], dtype=torch.long)
+        gt_obj = Instances(boxes=boxes, labels=labels)
+        gt_list.append(gt_obj)
+    collated['gt_instances'] = gt_list
+
+    # proposals (vide si non fourni)
+    collated['proposals'] = [None] * len(batch)
+
+    # autres champs (image_id, size, orig_size)
+    collated['image_id'] = [b['image_id'] for b in batch]
+    collated['orig_size'] = [b['orig_size'] for b in batch]
+    collated['size'] = [b['size'] for b in batch]
+
+    return collated
+# =====================================
 
 def _max_by_axis(the_list):
     # type: (List[List[int]]) -> List[int]

@@ -26,7 +26,7 @@ import datasets.samplers as samplers
 from datasets import build_dataset
 from engine import train_one_epoch_mot
 from models import build_model
-
+import pdb
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Deformable DETR Detector', add_help=False)
@@ -126,6 +126,8 @@ def get_args_parser():
 
     # dataset parameters
     parser.add_argument('--dataset_file', default='coco')
+    # arg data_path added by Ziyad
+    parser.add_argument('--data_path', default ='../../../Data/MyDataset/post_split/', type=str)
     parser.add_argument('--gt_file_train', type=str)
     parser.add_argument('--gt_file_val', type=str)
     parser.add_argument('--coco_path', default='/data/workspace/detectron2/datasets/coco/', type=str)

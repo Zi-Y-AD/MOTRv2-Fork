@@ -27,30 +27,103 @@ def is_tensor_or_instances(data):
     return isinstance(data, torch.Tensor) or isinstance(data, Instances)
 
 
+# def data_apply(data, check_func, apply_func):
+#     if isinstance(data, dict):
+#         for k in data.keys():
+#             if check_func(data[k]):
+#                 data[k] = apply_func(data[k])
+#             elif isinstance(data[k], dict) or isinstance(data[k], list):
+#                 data_apply(data[k], check_func, apply_func)
+#             else:
+#                 raise ValueError()
+#     elif isinstance(data, list):
+#         for i in range(len(data)):
+#             if check_func(data[i]):
+#                 data[i] = apply_func(data[i])
+#             elif isinstance(data[i], dict) or isinstance(data[i], list):
+#                 data_apply(data[i], check_func, apply_func)
+#             else:
+#                 raise ValueError("invalid type {}".format(type(data[i])))
+#     else:
+#         raise ValueError("invalid type {}".format(type(data)))
+#     return data
+# ==============================================================================
 def data_apply(data, check_func, apply_func):
-    if isinstance(data, dict):
-        for k in data.keys():
-            if check_func(data[k]):
-                data[k] = apply_func(data[k])
-            elif isinstance(data[k], dict) or isinstance(data[k], list):
-                data_apply(data[k], check_func, apply_func)
-            else:
-                raise ValueError()
-    elif isinstance(data, list):
-        for i in range(len(data)):
-            if check_func(data[i]):
-                data[i] = apply_func(data[i])
-            elif isinstance(data[i], dict) or isinstance(data[i], list):
-                data_apply(data[i], check_func, apply_func)
-            else:
-                raise ValueError("invalid type {}".format(type(data[i])))
-    else:
-        raise ValueError("invalid type {}".format(type(data)))
-    return data
+    """
+    Parcourt récursivement dict/list et applique apply_func sur les éléments
+    pour lesquels check_func(element) est True.
+    On convertit aussi les scalaires (int/float) en Tensor pour éviter ValueError.
+    """
+    # Si c'est un Tensor ou une Instance (check_func True), appliquer
+    if check_func(data):
+        return apply_func(data)
 
+    # dict -> récursif
+    if isinstance(data, dict):
+        for k in list(data.keys()):
+            data[k] = data_apply(data[k], check_func, apply_func)
+        return data
+
+    # list/tuple -> récursif (converti en list si tuple)
+    if isinstance(data, (list, tuple)):
+        new_list = []
+        for i, v in enumerate(data):
+            # si on trouve un scalaire numérique, on convertit en Tensor
+            if isinstance(v, (int, float)):
+                v = torch.tensor(v)
+            new_list.append(data_apply(v, check_func, apply_func))
+        return new_list if isinstance(data, list) else tuple(new_list)
+
+    # si array numpy -> convertir en tensor puis appliquer
+    try:
+        import numpy as np
+        if isinstance(data, np.ndarray):
+            tensor = torch.from_numpy(data)
+            return apply_func(tensor) if check_func(tensor) else data_apply(tensor, check_func, apply_func)
+    except Exception:
+        pass
+
+    # cas non supporté — levons une erreur informative
+    raise ValueError(f"invalid type {type(data)} in data_apply (expected Tensor/dict/list/ndarray)")
+# ==============================================================
+from util.misc import Instances
+
+def tensor_to_cuda(x, device):
+    if isinstance(x, torch.Tensor):
+        return x.to(device)
+    elif isinstance(x, Instances):
+        # On met tous les champs de Instances sur le device
+        x.boxes = x.boxes.to(device)
+        x.labels = x.labels.to(device)
+        # Ajouter d'autres champs si besoin
+        return x
+    return x
+
+def is_tensor_or_instances(x):
+    return isinstance(x, (torch.Tensor, Instances))
+
+def data_apply(data, check_func, apply_func):
+    """
+    Applique récursivement apply_func à tout Tensor ou Instances dans data.
+    """
+    if check_func(data):
+        return apply_func(data)
+    elif isinstance(data, dict):
+        return {k: data_apply(v, check_func, apply_func) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [data_apply(v, check_func, apply_func) for v in data]
+    elif isinstance(data, torch.Tensor) or isinstance(data, Instances):
+        return apply_func(data)
+    elif hasattr(data, '__array__'):
+        return apply_func(torch.from_numpy(data))
+    else:
+        return data  # tout ce qui n'est pas Tensor / dict / list / ndarray / Instances reste intact
 
 def data_dict_to_cuda(data_dict, device):
     return data_apply(data_dict, is_tensor_or_instances, partial(tensor_to_cuda, device=device))
+# =======================================================================
+# def data_dict_to_cuda(data_dict, device):
+#     return data_apply(data_dict, is_tensor_or_instances, partial(tensor_to_cuda, device=device))
 
 
 class data_prefetcher():
